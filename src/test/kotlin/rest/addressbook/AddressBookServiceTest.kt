@@ -1,7 +1,7 @@
 package rest.addressbook
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -18,7 +18,7 @@ import java.net.URI
 class AddressBookServiceTest {
 
     @LocalServerPort
-    var port = 0
+    var port = 8080
 
     @Autowired
     lateinit var restTemplate: TestRestTemplate
@@ -39,6 +39,8 @@ class AddressBookServiceTest {
         // Verify that GET /contacts is well implemented by the service, i.e
         // complete the test to ensure that it is safe and idempotent
         //////////////////////////////////////////////////////////////////////
+        val response2 = restTemplate.getForEntity("http://localhost:$port/contacts", Array<Person>::class.java)
+        assertEquals(0, response2.body?.size)
     }
 
     @Test
@@ -73,6 +75,20 @@ class AddressBookServiceTest {
         // Verify that POST /contacts is well implemented by the service, i.e
         // complete the test to ensure that it is not safe and not idempotent
         //////////////////////////////////////////////////////////////////////
+
+        // Verify that state has changed (not safe). nextId is 2 and personList.size is 1 now,
+        // since one person was added after POST call
+        assertEquals(2,addressBook.nextId)
+        assertEquals(1,addressBook.personList.size)
+
+        // Check method is not idempotent by creating another POST request and
+        // verifying that server state changed once again
+        val previousId = addressBook.nextId
+        val previousSize = addressBook.personList.size
+        restTemplate.postForEntity("http://localhost:$port/contacts", juan, Person::class.java)
+        assertNotEquals(previousId, addressBook.nextId)
+        assertNotEquals(previousSize, addressBook.personList.size)
+
     }
 
     @Test
@@ -117,6 +133,17 @@ class AddressBookServiceTest {
         // Verify that GET /contacts/person/3 is well implemented by the service, i.e
         // complete the test to ensure that it is safe and idempotent
         //////////////////////////////////////////////////////////////////////
+
+        // Execute GET method again and check all fields
+        response = restTemplate.getForEntity(mariaURI, Person::class.java)
+
+        assertEquals(200, response.statusCode.value())
+        assertEquals(MediaType.APPLICATION_JSON, response.headers.contentType)
+        mariaUpdated = response.body
+        assertEquals(mariaUpdated?.name, mariaUpdated?.name)
+        assertEquals(3,mariaUpdated?.id)
+        assertEquals(mariaUpdated?.href,mariaUpdated?.href)
+
     }
 
     @Test
@@ -139,6 +166,12 @@ class AddressBookServiceTest {
         // Verify that GET /contacts is well implemented by the service, i.e
         // complete the test to ensure that it is safe and idempotent
         //////////////////////////////////////////////////////////////////////
+        val response2 = restTemplate.getForEntity("http://localhost:$port/contacts", Array<Person>::class.java)
+        assertEquals(200, response2.statusCode.value())
+        assertEquals(MediaType.APPLICATION_JSON, response2.headers.contentType)
+        assertEquals(2, response2.body?.size)
+        assertEquals(juan.name, response2.body?.get(1)?.name)
+        assertEquals(salvador.name, response2.body?.get(0)?.name)
     }
 
     @Test
@@ -153,8 +186,12 @@ class AddressBookServiceTest {
         // Update Maria
         val maria = Person(name = "Maria")
 
+        val juanBefore = addressBook.personList.find { person -> person.name == juan.name }
+
         var response = restTemplate.exchange(juanURI, HttpMethod.PUT, HttpEntity(maria), Person::class.java)
         assertEquals(204, response.statusCode.value())
+
+        val juanAfter = addressBook.personList.find { person -> person.name == juan.name }
 
         // Verify that the update is real
         response = restTemplate.getForEntity(juanURI, Person::class.java)
@@ -178,6 +215,24 @@ class AddressBookServiceTest {
         // Verify that PUT /contacts/person/2 is well implemented by the service, i.e
         // complete the test to ensure that it is idempotent but not safe
         //////////////////////////////////////////////////////////////////////
+
+        // Not safe -> Server state has changed (Juan was not saved before PUT call)
+        assertNotNull(juanBefore)
+        assertNull(juanAfter)
+
+        // Idempotent -> PUT returns same response as previously
+        val newPutResponse = restTemplate.exchange(juanURI, HttpMethod.PUT, HttpEntity(maria), Person::class.java)
+        assertEquals(204, newPutResponse.statusCode.value())
+
+        val newResponse = restTemplate.getForEntity(juanURI, Person::class.java)
+        assertEquals(200, newResponse.statusCode.value())
+        assertEquals(MediaType.APPLICATION_JSON, newResponse.headers.contentType)
+
+        val updatedMaria2 = newResponse.body
+        assertEquals(updatedMaria?.name, updatedMaria2?.name)
+        assertEquals(2, updatedMaria2?.id)
+        assertEquals(juanURI, updatedMaria2?.href)
+
     }
 
     @Test
@@ -199,6 +254,13 @@ class AddressBookServiceTest {
         // Verify that DELETE /contacts/person/2 is well implemented by the service, i.e
         // complete the test to ensure that it is idempotent but not safe
         //////////////////////////////////////////////////////////////////////
+
+        // Not safe -> Server state changed (Juan juas deleted)
+        assertNull(addressBook.personList.find { person -> person.name == juan.name })
+
+        // Idempotent -> Consecutive DELETE have same result
+        restTemplate.execute(juanURI, HttpMethod.DELETE, {},
+            { assertNull(addressBook.personList.find { person -> person.name == juan.name }) })
     }
 
     @Test
